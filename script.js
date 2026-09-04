@@ -52,7 +52,10 @@ async function fetchHtmlWithFallback(targetUrl, opts = {}) {
             }
             if (!isApi) {
                 const ltCount = (text.match(/</g) || []).length;
-                if (!text || text.length < 800 || ltCount < 10 || /Just a moment|Attention Required|Cloudflare|Access Denied|cf-chl|Temporarily Offline|Internet Archive services are temporarily offline|origin connection.*fail|error code: 522|error code: 403/i.test(text)) {
+                // OJO: no usar "Cloudflare" a secas como señal de bloqueo: el HTML
+                // válido de Wayback incluye el beacon cloudflareinsights (analytics).
+                // Solo los marcadores de challenge/página de bloqueo indican 403 real.
+                if (!text || text.length < 800 || ltCount < 10 || /Just a moment|Attention Required|challenge-platform|cf-chl|cf_chl|__cf_chl|Access Denied|Temporarily Offline|Internet Archive services are temporarily offline|origin connection.*fail|error code: 522|error code: 403/i.test(text)) {
                     throw new Error('Bloqueo/HTML vacío/error (' + text.length + ' chars, ' + ltCount + ' tags)');
                 }
             } else {
@@ -96,7 +99,7 @@ async function fetchOMDbLive(title) {
     return { imdb, critic: rotten ? rotten.Value : null };
 }
 
-// ---------- FILMAFFINITY - scraping search.php -> filmXXX.html ----------
+// ---------- FILMAFFINITY - search.php directo, fallback DDG + Wayback (evita Cloudflare) ----------
 async function fetchFilmaffinityDirect(title) {
     // 1) Buscar la peli en FilmAffinity con lo escrito en el input
     console.log('[Filma] 1/3 buscando en filmaffinity:', title);
@@ -131,9 +134,42 @@ async function fetchFilmaffinityDirect(title) {
     console.log('[Filma] 3/3 puntuación', rating);
     return rating;
 }
-// Scraping plano: buscar la peli en FilmAffinity, localizar su ficha y pillar la nota.
+// Scraping plano: Bing RSS + Wayback PRIMERO (ruta rápida ~2s, evita Cloudflare),
+// search.php directo solo como fallback (allorigins tarda 19s en dar 522).
 async function fetchFilmaffinity(title) {
-    return fetchFilmaffinityDirect(title);
+    try {
+        return await fetchFilmaffinityViaWayback(title);
+    } catch (e) {
+        console.warn('[Filma] DDG+Wayback falló, probando directo:', e.message);
+        return fetchFilmaffinityDirect(title);
+    }
+}
+// filmID vía Bing RSS (XML ligero 5KB, no bloquea datacenters, trae el link
+// https://www.filmaffinity.com/es/filmNNNNNN.html directo en <link>).
+async function fetchFilmaIdViaDDG(title) {
+    const rssUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent('site:filmaffinity.com ' + title)}`;
+    const xml = await fetchHtmlWithFallback(rssUrl);
+    const ids = [...new Set([...xml.matchAll(/filmaffinity\.com\/(?:es|en|us)\/film(\d+)\.html/gi)].map(m => m[1]))];
+    if (!ids.length) throw new Error('Bing RSS sin filmID para "' + title + '"');
+    console.log('[Filma] Bing RSS filmID', ids[0]);
+    return ids[0];
+}
+async function fetchFilmaffinityViaWayback(title) {
+    const filmId = await fetchFilmaIdViaDDG(title);
+    // Wayback redirige /web/<año>/ al snapshot más cercano: HTML ORIGINAL archivado.
+    const stamps = ['2024', '2023', '2020'];
+    let lastErr = null;
+    for (const ts of stamps) {
+        const snapUrl = `https://web.archive.org/web/${ts}id_/https://www.filmaffinity.com/es/film${filmId}.html`;
+        try {
+            const snapHtml = await fetchHtmlWithFallback(snapUrl);
+            return extractFilmaRating(snapHtml);
+        } catch (e) {
+            console.warn('[Filma] snapshot', ts, 'falló:', e.message);
+            lastErr = e;
+        }
+    }
+    throw lastErr || new Error('Wayback sin snapshot para film' + filmId);
 }
 function extractFilmaRating(detailHtml) {
     const detailDoc = parseHTML(detailHtml);
@@ -215,29 +251,27 @@ async function fetchIMDb(title) {
     return rating.replace('.', ',').slice(0,4).split('/')[0];
 }
 
-// ---------- ROTTEN - con API napi + fallback OMDb vivo ----------
+// ---------- ROTTEN - slug directo + /search, fallback OMDb vivo ----------
+// El napi/search da 401 desde datacenter y allorigins tarda 12s: se omite.
+// /m/<slug> responde 200 en ~600ms vía proxy; /search lo corrige si el slug falla.
 async function fetchRotten(title) {
     const map = { 'el caballero oscuro': 'The Dark Knight', 'origen': 'Inception', 'interestelar': 'Interstellar' };
     const qTitle = map[title.trim().toLowerCase()] || title;
     const slugGuess = qTitle.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');
-    let movieUrl = null;
+    let movieUrl = `https://www.rottentomatoes.com/m/${slugGuess}`;
+    let html = null;
+    let lastErr = null;
     try {
-        const apiUrl = `https://www.rottentomatoes.com/napi/search/all?query=${encodeURIComponent(qTitle)}`;
-        const jsonTxt = await fetchHtmlWithFallback(apiUrl);
-        const data = JSON.parse(jsonTxt);
-        const movies = data.movies || data.results?.movies || data.items || [];
-        const first = Array.isArray(movies) ? movies[0] : null;
-        if (first && (first.url || first.vanityUrl || first.titleUrl)) {
-            const u = first.url || first.vanityUrl || first.titleUrl;
-            movieUrl = u.startsWith('http') ? u : 'https://www.rottentomatoes.com' + u;
-            console.log('[Rotten] API encontró', movieUrl);
-        } else {
-            const alt = data.searchResults?.movies?.[0] || data.movieResults?.[0];
-            if (alt && alt.url) movieUrl = 'https://www.rottentomatoes.com' + alt.url;
-        }
-    } catch(e) { console.warn('[Rotten] API search falló', e.message); }
+        html = await fetchHtmlWithFallback(movieUrl);
+        if (!/score-board|tomatometerScore|audienceScore/i.test(html)) throw new Error('Slug sin scores');
+        console.log('[Rotten] slug directo OK', movieUrl);
+    } catch (e) {
+        console.warn('[Rotten] slug directo falló, probando /search:', e.message);
+        lastErr = e;
+        movieUrl = null;
+    }
 
-    if (!movieUrl) {
+    if (!html) {
         try {
             const searchUrl = `https://www.rottentomatoes.com/search?search=${encodeURIComponent(qTitle)}`;
             const searchHtml = await fetchHtmlWithFallback(searchUrl);
@@ -262,9 +296,9 @@ async function fetchRotten(title) {
             if (movieUrl) console.log('[Rotten] search eligió', movieUrl);
         } catch {}
     }
-    if (!movieUrl) movieUrl = `https://www.rottentomatoes.com/m/${slugGuess}`;
+    if (!movieUrl) throw lastErr || new Error('Rotten sin URL para "' + qTitle + '"');
     console.log('[Rotten] movieUrl', movieUrl);
-    const html = await fetchHtmlWithFallback(movieUrl);
+    if (!html) html = await fetchHtmlWithFallback(movieUrl);
     const doc = parseHTML(html);
     let critic = null, audience = null;
     const board = doc.querySelector('score-board');
