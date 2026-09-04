@@ -418,7 +418,8 @@ function paintCell(td, value) {
 async function handleSearch() {
     const raw = input.value.trim();
     if (!raw) { titleCell.textContent = 'Escribe una película'; return; }
-    titleCell.textContent = raw;
+    titleCell.textContent = raw.toUpperCase();
+    input.value = '';
     btn.disabled = true;
     btn.style.opacity = '0.6';
     Object.values(cells).forEach(td => { td.textContent = '...'; td.classList.add('loading'); });
