@@ -1,0 +1,109 @@
+
+/*:root {
+    --color-filmafinity: #447CAD;
+}*/
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: darkslategrey;
+    margin: 20px;
+}
+
+.general {
+    color: goldenrod;
+}
+
+.point {
+    color: steelblue;
+}
+
+.movies {
+    color: darkred;
+}
+
+h1 {
+    text-align: center;
+    font-style: italic;
+}
+
+table {
+    border-collapse: collapse;
+}
+
+thead td {
+    background-color: darkslategrey;
+    text-decoration: underline;
+    color: lightgrey;
+    padding-left: 0px;
+    font-size: 18px;
+    height: 10px;
+    border: none;
+    text-align: left;
+}
+
+th, td {
+    border: 1px solid black;
+    text-align: center;
+    padding: 8px;
+}
+
+td {
+    background-color: darkgrey;
+    font-weight: bold;
+    color: black;
+    height: 50px;
+    font-size: 15px;
+}
+
+.imdb {
+    background-color: gold;
+}
+
+.sensa {
+    background-color: goldenrod;
+}
+
+.filma {
+    /*background-color: var(--color-filmafinity);*/
+    background-color: steelblue;
+}
+
+.rotten {
+    background-color: firebrick;
+}
+
+.critic, .audience {
+    background-color: green;
+    font-style: italic;
+}
+
+input, button {
+    border-radius: 4px;
+    border-color: grey;
+    border-style: solid;
+}
+
+input {
+    width: 45%;
+    height: 26px;
+    padding: 0 8px;
+}
+
+button {
+    height: 31px;
+    cursor: pointer;
+}
+
+button:active {
+    transform: scale(0.85);
+}
+
+button:hover {
+    background-color: lightgrey;
+}
+
+td.loading {
+    color: dimgrey;
+    font-style: italic;
+    font-weight: normal;
+}

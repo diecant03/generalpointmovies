@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="styles.css">
+    <title>General Point Movies</title>
+</head>
+<body>
+    <h1>
+        <span class="general">General</span>
+        <span class="point">Point</span>
+        <span class="movies">Movies</span>
+    </h1>
+
+    <div class="search">
+        <input id="movieInput" type="text" placeholder="Buscar película en GPM (ej: The Dark Knight)">
+        <button id="searchBtn" type="button" aria-label="Buscar">
+        	<span>&#128269;</span>
+        </button>
+    </div><br>
+
+    <table>
+        <thead>
+            <tr><td colspan="5" id="movieTitle"></td></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <th class="imdb" rowspan="2" data-api="imdb">IMDB</th>
+                <th class="sensa" rowspan="2" data-api="sensacine">Sensacine</th>
+                <th class="filma" rowspan="2" data-api="filmaffinity">Filmaffinity</th>
+                <th class="rotten" colspan="2">Rotten Tomatoes</th>
+            </tr>
+            <tr>
+                <th class="critic" data-api="rotten-critic">Critic</th>
+                <th class="audience" data-api="rotten-audience">Audience</th>
+            </tr>
+            <tr id="ratingsRow">
+                <td id="td-imdb"></td>
+                <td id="td-sensa"></td>
+                <td id="td-filma"></td>
+                <td id="td-critic"></td>
+                <td id="td-audience"></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <script src="script.js"></script>
+</body>
+</html>

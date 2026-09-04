@@ -1,0 +1,12 @@
+tareas:
+
+- añadir proxy principal
+- poner buscador peli
+- pillar api cada pag
+- tabla con cada pag
+- colores tabla
+- colores gen
+- algo en js
+- 
+- 
+- 
