@@ -1,19 +1,12 @@
-// Proxy principal + respaldos para saltar bloqueos de Filmaffinity/Rotten (método cutre por HTML)
+// Proxy principal + 1 respaldo público (allorigins). El proxy propio es rápido
+// y envía X-Proxy-Token; los demás solo entran si el propio falla.
 const PROXY_URL = 'https://cantelar.twilightparadox.com/api-proxy';
 const PROXY_TOKEN = 'Y31DbsxjRN9oq9DBJ3eZ16FBbFNAfM6cqAzNi1cSPAYSGL1NZq';
 const OMDB_API_KEY = 'thewdb';
 const OMDB_API_URL = 'https://www.omdbapi.com/';
-// API espejo de FilmAffinity (RapidAPI "filmaffinity-data-api").
-// FilmAffinity bloquea todo scraping directo con 403 Cloudflare (verificado:
-// cantelar 403, allorigins 522, corsproxy 403, codetabs 522, translate 403).
-// Consigue key gratis en https://rapidapi.com/superdatai-superdatai/api/filmaffinity-data-api
-// y pégala aquí. Sin key se intenta scraping directo y si falla queda N/D sin bloquear al resto (async).
-const RAPIDAPI_KEY = '';
-const RAPIDAPI_HOST = 'filmaffinity-data-api.p.rapidapi.com';
-// API local de scraping solo-FilmAffinity (dgongut/filmaffinity-api, Docker).
-// Arráncala con: docker pull dgongut/filmaffinity-api && docker run -p 22049:22049 dgongut/filmaffinity-api
-// Hace web scraping de filmaffinity.com desde tu máquina (IP residencial, pasa Cloudflare).
-const FILMA_LOCAL_API = 'http://localhost:22049';
+const DEFAULT_TIMEOUT_MS = 12000;
+// FilmAffinity bloquea IPs de datacenter con 403 Cloudflare (verificado).
+// Se intenta scraping directo y si falla queda N/D sin bloquear al resto (async).
 
 const input = document.getElementById('movieInput');
 const btn = document.getElementById('searchBtn');
@@ -28,12 +21,10 @@ const cells = {
 
 async function fetchHtmlWithFallback(targetUrl, opts = {}) {
     const isApi = /omdbapi\.com|sg\.media-imdb\.com|suggestion|napi\/search|archive\.org\/wayback\/available/i.test(targetUrl);
-    const timeoutMs = opts.timeoutMs || 15000;
+    const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
     const candidates = [
         { url: `${PROXY_URL}?url=${encodeURIComponent(targetUrl)}`, headers: { 'X-Proxy-Token': PROXY_TOKEN } },
         { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, headers: {} },
-        { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, headers: {} },
-        { url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, headers: {} },
     ];
     let lastErr = null;
     for (const c of candidates) {
@@ -105,36 +96,7 @@ async function fetchOMDbLive(title) {
     return { imdb, critic: rotten ? rotten.Value : null };
 }
 
-// ---------- FILMAFFINITY - scraping dedicado (solo filmaffinity.com) + API espejo ----------
-// 1) Scraping directo search.php -> filmXXX.html (HTML original).
-// 2) Si hay 403 Cloudflare: Brave (vía proxy, no bloqueado) da el filmID,
-//    y Wayback Machine sirve el HTML ORIGINAL archivado de filmaffinity.com (sin Cloudflare).
-// 3) Si todo falla y RAPIDAPI_KEY configurada, usa API espejo RapidAPI.
-async function fetchFilmaffinityViaAPI(title) {
-    if (!RAPIDAPI_KEY) throw new Error('Sin RAPIDAPI_KEY');
-    const headers = { 'X-RapidAPI-Key': RAPIDAPI_KEY, 'X-RapidAPI-Host': RAPIDAPI_HOST };
-    const searchUrl = `https://${RAPIDAPI_HOST}/v1/search?query=${encodeURIComponent(title)}`;
-    const sRes = await fetch(searchUrl, { headers });
-    if (!sRes.ok) throw new Error('RapidAPI search ' + sRes.status);
-    const sData = await sRes.json();
-    const list = Array.isArray(sData) ? sData : (sData.results || sData.data || sData.items || []);
-    const first = list[0];
-    if (!first) throw new Error('RapidAPI sin resultados');
-    const filmId = first.film_id || first.filmId || first.id;
-    const filmUrl = first.url;
-    let detail = null;
-    if (filmId) {
-        const dRes = await fetch(`https://${RAPIDAPI_HOST}/v1/item/by-id?id=${encodeURIComponent(filmId)}`, { headers });
-        if (dRes.ok) detail = await dRes.json();
-    }
-    if (!detail && filmUrl) {
-        const dRes = await fetch(`https://${RAPIDAPI_HOST}/v1/item?url=${encodeURIComponent(filmUrl)}`, { headers });
-        if (dRes.ok) detail = await dRes.json();
-    }
-    const rating = detail?.rating ?? first.rating ?? first.score;
-    if (!rating || rating === '--') throw new Error('RapidAPI sin rating');
-    return String(rating).replace('.', ',').slice(0, 4);
-}
+// ---------- FILMAFFINITY - scraping search.php -> filmXXX.html ----------
 async function fetchFilmaffinityDirect(title) {
     // 1) Buscar la peli en FilmAffinity con lo escrito en el input
     console.log('[Filma] 1/3 buscando en filmaffinity:', title);
@@ -172,70 +134,6 @@ async function fetchFilmaffinityDirect(title) {
 // Scraping plano: buscar la peli en FilmAffinity, localizar su ficha y pillar la nota.
 async function fetchFilmaffinity(title) {
     return fetchFilmaffinityDirect(title);
-}
-// Scraping 100% FilmAffinity vía API local autoalojada (mismo HTML de cada peli).
-async function fetchFilmaffinityViaLocal(title) {
-    const searchUrl = `${FILMA_LOCAL_API}/api/search?query=${encodeURIComponent(title)}`;
-    const sRes = await fetch(searchUrl);
-    if (!sRes.ok) throw new Error('API local search HTTP ' + sRes.status + ' (¿docker en marcha?)');
-    const list = await sRes.json();
-    const arr = Array.isArray(list) ? list : (list.results || list.data || []);
-    if (!arr.length) throw new Error('API local sin resultados');
-    let pick = arr.find(x => x.rating && x.rating !== '--') || arr[0];
-    if (pick.rating && pick.rating !== '--') {
-        console.log('[Filma] local search rating', pick.rating);
-        return String(pick.rating).replace('.', ',').slice(0, 4);
-    }
-    const id = pick.id || pick.filmId;
-    if (!id) throw new Error('API local sin id ni rating');
-    const dRes = await fetch(`${FILMA_LOCAL_API}/api/film?id=${encodeURIComponent(id)}`);
-    if (!dRes.ok) throw new Error('API local film HTTP ' + dRes.status);
-    const detail = await dRes.json();
-    const rating = detail.rating;
-    if (!rating || rating === '--') throw new Error('API local sin rating');
-    console.log('[Filma] local detail rating', rating);
-    return String(rating).replace('.', ',').slice(0, 4);
-}
-// Obtiene el filmID vía Brave search (no bloqueado) y el HTML ORIGINAL vía Wayback.
-async function fetchFilmaIdViaBrave(title) {
-    const searchUrl = `https://search.brave.com/search?q=${encodeURIComponent('site:filmaffinity.com ' + title)}`;
-    const html = await fetchHtmlWithFallback(searchUrl);
-    const ids = [...new Set([...html.matchAll(/\/(?:es|en|us)\/film(\d+)\.html/gi)].map(m => m[1]))];
-    console.log('[Filma] Brave IDs', ids.slice(0, 5).join(', '));
-    if (!ids.length) throw new Error('Brave sin filmID para "' + title + '"');
-    return ids[0];
-}
-async function fetchFilmaffinityViaWayback(title) {
-    const filmId = await fetchFilmaIdViaBrave(title);
-    // Sin API availability (da 429): Wayback redirige /web/<año>/ al snapshot más cercano.
-    // Es el HTML ORIGINAL de filmaffinity.com archivado, web scraping puro sin API de pago.
-    const stamps = ['2026', '2024', '2020'];
-    let lastErr = null;
-    for (const ts of stamps) {
-        const snapUrl = `https://web.archive.org/web/${ts}id_/https://www.filmaffinity.com/es/film${filmId}.html`;
-        console.log('[Filma] Wayback snapshot', snapUrl);
-        try {
-            let snapHtml = null;
-            try {
-                const ctrl = new AbortController();
-                const t = setTimeout(() => ctrl.abort(), 12000);
-                let r;
-                try { r = await fetch(snapUrl, { signal: ctrl.signal }); }
-                finally { clearTimeout(t); }
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                snapHtml = await r.text();
-            } catch {
-                snapHtml = await fetchHtmlWithFallback(snapUrl, { timeoutMs: 8000 });
-            }
-            if (!snapHtml || snapHtml.length < 800) throw new Error('Snapshot vacío');
-            console.log('[Filma] snapshot len', snapHtml.length);
-            return extractFilmaRating(snapHtml);
-        } catch (e) {
-            console.warn('[Filma] snapshot', ts, 'falló:', e.message);
-            lastErr = e;
-        }
-    }
-    throw lastErr || new Error('Wayback sin snapshot para film' + filmId);
 }
 function extractFilmaRating(detailHtml) {
     const detailDoc = parseHTML(detailHtml);
@@ -392,81 +290,70 @@ async function fetchRotten(title) {
     return { critic: critic || 'N/D', audience: audience || 'N/D' };
 }
 
-function setLoading(isLoading, msg) {
-    Object.values(cells).forEach(td => {
-        if (isLoading) { td.textContent = '...'; td.classList.add('loading'); }
-        else td.classList.remove('loading');
-    });
-    if (msg) titleCell.textContent = msg;
-    btn.disabled = isLoading;
-    btn.style.opacity = isLoading ? '0.6' : '1';
-}
-function fillTable(r) {
-    cells.imdb.textContent = r.imdb || '—';
-    cells.sensa.textContent = r.sensa || '—';
-    cells.filma.textContent = r.filma || '—';
-    cells.critic.textContent = r.critic || '—';
-    cells.audience.textContent = r.audience || '—';
-}
-
 // Cada fuente pinta su td en cuanto resuelve, sin esperar a las demás.
-// IMDb / Sensacine / critic intactos, solo cambia la orquestación a asíncrona.
 function paintCell(td, value) {
     td.textContent = value || 'N/D';
     td.classList.remove('loading');
 }
+let currentSearchId = 0;
 async function handleSearch() {
-    const raw = input.value.trim();
+    const raw = input.value.trim().replace(/\s+/g, ' ');
     if (!raw) { titleCell.textContent = 'Escribe una película'; return; }
+    if (raw.length > 100) { titleCell.textContent = 'Título demasiado largo (máx 100)'; return; }
+    if (btn.disabled) return; // evita doble submit mientras hay búsqueda en curso
+    const searchId = ++currentSearchId;
+    const isStale = () => searchId !== currentSearchId;
     titleCell.textContent = raw.toUpperCase();
-    input.value = '';
     btn.disabled = true;
     btn.style.opacity = '0.6';
     Object.values(cells).forEach(td => { td.textContent = '...'; td.classList.add('loading'); });
 
-    let pending = 4;
-    const done = () => {
-        pending--;
-        if (pending <= 0) { btn.disabled = false; btn.style.opacity = '1'; }
+    const finish = () => {
+        if (!isStale()) { btn.disabled = false; btn.style.opacity = '1'; }
     };
 
-    fetchIMDb(raw).catch(async e => {
-        console.warn('IMDb scraping falló, fallback OMDb vivo:', e.message);
-        const live = await fetchOMDbLive(raw).catch(() => null);
-        if (live && live.imdb) return live.imdb;
-        throw e;
-    }).then(
-        v => { paintCell(cells.imdb, v); console.log('IMDb OK:', v); },
-        e => { paintCell(cells.imdb, 'N/D'); console.warn('IMDb falló:', e.message); }
-    ).finally(done);
+    const tasks = [
+        fetchIMDb(raw).catch(async e => {
+            console.warn('IMDb scraping falló, fallback OMDb vivo:', e.message);
+            const live = await fetchOMDbLive(raw).catch(() => null);
+            if (live && live.imdb) return live.imdb;
+            throw e;
+        }).then(
+            v => { if (!isStale()) paintCell(cells.imdb, v); },
+            e => { if (!isStale()) paintCell(cells.imdb, 'N/D'); console.warn('IMDb falló:', e.message); }
+        ),
 
-    fetchSensacine(raw).then(
-        v => { paintCell(cells.sensa, v); console.log('Sensacine OK:', v); },
-        e => { paintCell(cells.sensa, 'N/D'); console.warn('Sensacine falló:', e.message); }
-    ).finally(done);
+        fetchSensacine(raw).then(
+            v => { if (!isStale()) paintCell(cells.sensa, v); },
+            e => { if (!isStale()) paintCell(cells.sensa, 'N/D'); console.warn('Sensacine falló:', e.message); }
+        ),
 
-    fetchFilmaffinity(raw).then(
-        v => { paintCell(cells.filma, v); console.log('Filmaffinity OK:', v); },
-        e => { paintCell(cells.filma, 'N/D'); console.warn('Filmaffinity falló:', e.message); }
-    ).finally(done);
+        fetchFilmaffinity(raw).then(
+            v => { if (!isStale()) paintCell(cells.filma, v); },
+            e => { if (!isStale()) paintCell(cells.filma, 'N/D'); console.warn('Filmaffinity falló:', e.message); }
+        ),
 
-    fetchRotten(raw).catch(async e => {
-        console.warn('Rotten scraping falló, fallback OMDb vivo:', e.message);
-        const live = await fetchOMDbLive(raw).catch(() => null);
-        if (live && live.critic) return { critic: live.critic, audience: 'N/D' };
-        throw e;
-    }).then(
-        r => {
-            paintCell(cells.critic, r.critic);
-            paintCell(cells.audience, r.audience);
-            console.log('Rotten OK:', r);
-        },
-        e => {
-            paintCell(cells.critic, 'N/D');
-            paintCell(cells.audience, 'N/D');
-            console.warn('Rotten falló:', e.message);
-        }
-    ).finally(done);
+        fetchRotten(raw).catch(async e => {
+            console.warn('Rotten scraping falló, fallback OMDb vivo:', e.message);
+            const live = await fetchOMDbLive(raw).catch(() => null);
+            if (live && live.critic) return { critic: live.critic, audience: 'N/D' };
+            throw e;
+        }).then(
+            r => {
+                if (isStale()) return;
+                paintCell(cells.critic, r.critic);
+                paintCell(cells.audience, r.audience);
+            },
+            e => {
+                if (isStale()) return;
+                paintCell(cells.critic, 'N/D');
+                paintCell(cells.audience, 'N/D');
+                console.warn('Rotten falló:', e.message);
+            }
+        ),
+    ];
+    await Promise.allSettled(tasks);
+    finish();
 }
 
 btn.addEventListener('click', handleSearch);
